@@ -1,10 +1,12 @@
 import fitz  # PyMuPDF
 import logging
+import requests
+import io
 from typing import List, Optional, Tuple, Dict, Union
 
 class PDFTextExtractor:
-    def __init__(self, pdf_path: str):
-        self.pdf_path = pdf_path
+    def __init__(self, pdf_source: Union[str, io.BytesIO]):
+        self.pdf_source = pdf_source
         logging.basicConfig(level=logging.DEBUG)
         self.logger = logging.getLogger(__name__)
 
@@ -15,8 +17,11 @@ class PDFTextExtractor:
         stop_keywords: Optional[List[Dict[str, Union[str, bool]]]] = None
     ) -> str:
         try:
-            # PDF 열기
-            doc = fitz.open(self.pdf_path)
+            # PDF 열기 (URL 또는 로컬 파일 경로)
+            if isinstance(self.pdf_source, str):
+                doc = fitz.open(self.pdf_source)
+            else:
+                doc = fitz.open("pdf", self.pdf_source)
             
             # 페이지 가져오기
             page = doc[page_number]
@@ -32,12 +37,6 @@ class PDFTextExtractor:
 
             # 줄 단위로 분리
             lines = text.split('\n')
-            """
-            # 디버그: 전체 추출된 라인 출력
-            self.logger.debug("전체 추출된 라인:")
-            for idx, line in enumerate(lines):
-                self.logger.debug(f"{idx}: {line}")
-            """
 
             # 중단 키워드 처리
             if stop_keywords:
@@ -45,13 +44,8 @@ class PDFTextExtractor:
                     keyword = keyword_config.get('keyword', '')
                     exclude_two_before = keyword_config.get('exclude_keyword_two_before_line', False)
                     
-                    # self.logger.debug(f"키워드 처리: '{keyword}', exclude_two_before: {exclude_two_before}")
-                    
                     for i, line in enumerate(lines):
                         if keyword in line.strip():
-                            # self.logger.debug(f"키워드 발견: '{keyword}' in line {i}: {line}")
-                            
-                            # exclude_keyword_two_before_line 옵션 처리
                             if exclude_two_before:
                                 # 키워드 2줄 전까지 텍스트 추출
                                 cut_index = max(0, i - 2)
@@ -107,8 +101,8 @@ SECURITIES_CONFIGS = {
     },
     "유안타증권": {
         "page_num": 0,
-        "coordinates": (30, 180, 400, 600),
-        "stop_keywords": []
+        "coordinates": (30, 180, 400, 650),
+        "stop_keywords": [{"keyword": "Forecasts and valuations (K-IFRS 연결)", "exclude_keyword_two_before_line": False}]
     },
     "유진투자증권": {
         "page_num": 0,
@@ -142,11 +136,12 @@ SECURITIES_CONFIGS = {
     },
 }
 
-def extract_report_text(pdf_path: str, securities_firm: str) -> str:
+def extract_report_text(pdf_input: Union[str, io.BytesIO], securities_firm: str) -> str:
     """
-    특정 증권사 리포트에서 텍스트 추출
+    특정 증권사 리포트에서 텍스트 추출. 
+    로컬 파일 경로나 PDF URL 모두 지원
     
-    :param pdf_path: PDF 파일 경로
+    :param pdf_input: PDF 파일 경로 또는 URL
     :param securities_firm: 증권사 이름
     :return: 추출된 텍스트
     """
@@ -156,7 +151,17 @@ def extract_report_text(pdf_path: str, securities_firm: str) -> str:
         logging.warning(f"{securities_firm}에 대한 설정이 없습니다.")
         return ""
     
-    extractor = PDFTextExtractor(pdf_path)
+    # URL인 경우 다운로드
+    if isinstance(pdf_input, str) and pdf_input.startswith(('http://', 'https://')):
+        try:
+            response = requests.get(pdf_input)
+            response.raise_for_status()
+            pdf_input = io.BytesIO(response.content)
+        except requests.exceptions.RequestException as e:
+            logging.error(f"PDF 다운로드 중 오류 발생: {e}")
+            return ""
+    
+    extractor = PDFTextExtractor(pdf_input)
     return extractor.extract_text(
         page_number=config.get('page_num', 1),
         rect_coordinates=config.get('coordinates', (0, 0, 0, 0)),
@@ -165,9 +170,21 @@ def extract_report_text(pdf_path: str, securities_firm: str) -> str:
 
 # 사용 예시
 if __name__ == "__main__":
+    # 로컬 파일 경로
     pdf_file_path = "20241206_company_651563000.pdf"
-    securities_firm = "유진투자증권"  # 원하는 증권사 이름 입력
     
-    text = extract_report_text(pdf_file_path, securities_firm)
-    print(f"{securities_firm} 리포트 텍스트:")
-    print(text)
+    # 또는 PDF URL
+    pdf_url = "https://stock.pstatic.net/stock-research/company/18/20241211_company_639609000.pdf"
+    
+    securities_firm = "유안타증권"  # 원하는 증권사 이름 입력
+    
+    # 로컬 파일 사용
+    """
+    text_local = extract_report_text(pdf_file_path, securities_firm)
+    print(f"로컬 파일 텍스트:")
+    print(text_local)
+    """
+    # URL 사용
+    text_url = extract_report_text(pdf_url, securities_firm)
+    print(f"\nURL PDF 텍스트:")
+    print(text_url)
