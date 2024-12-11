@@ -62,7 +62,7 @@ class PDFTextExtractor:
             self.logger.error(f"PDF 텍스트 추출 중 오류 발생: {e}")
             return ""
 
-# 증권사별 기본 설정 딕셔너리
+# 증권사별 기본 설정 딕셔너리 (대충 채움)
 SECURITIES_CONFIGS = {
     "SK증권": {
         "page_num": 0,
@@ -136,55 +136,46 @@ SECURITIES_CONFIGS = {
     },
 }
 
-def extract_report_text(pdf_input: Union[str, io.BytesIO], securities_firm: str) -> str:
-    """
-    특정 증권사 리포트에서 텍스트 추출. 
-    로컬 파일 경로나 PDF URL 모두 지원
-    
-    :param pdf_input: PDF 파일 경로 또는 URL
-    :param securities_firm: 증권사 이름
-    :return: 추출된 텍스트
-    """
-    config = SECURITIES_CONFIGS.get(securities_firm)
-    
-    if not config:
-        logging.warning(f"{securities_firm}에 대한 설정이 없습니다.")
-        return ""
-    
-    # URL인 경우 다운로드
-    if isinstance(pdf_input, str) and pdf_input.startswith(('http://', 'https://')):
+def download_and_process_pdf(pdf_url: str, securities_firm: str) -> str:
+    try:
+        # 1. PDF 다운로드
+        response = requests.get(pdf_url)
+        response.raise_for_status()
+        
+        # 2. 메모리 버퍼에 PDF 로드
+        pdf_buffer = io.BytesIO(response.content)
+        
         try:
-            response = requests.get(pdf_input)
-            response.raise_for_status()
-            pdf_input = io.BytesIO(response.content)
-        except requests.exceptions.RequestException as e:
-            logging.error(f"PDF 다운로드 중 오류 발생: {e}")
-            return ""
+            # 3. PDF 처리
+            config = SECURITIES_CONFIGS.get(securities_firm)
+            if not config:
+                print(f"{securities_firm}에 대한 설정이 없습니다.")
+                return ""
+            
+            extractor = PDFTextExtractor(pdf_buffer)
+            text = extractor.extract_text(
+                page_number=config.get('page_num', 1),
+                rect_coordinates=config.get('coordinates', (0, 0, 0, 0)),
+                stop_keywords=config.get('stop_keywords', [])
+            )
+            
+            return text
+        
+        finally:
+            # 4. 메모리 버퍼 닫기
+            pdf_buffer.close()
     
-    extractor = PDFTextExtractor(pdf_input)
-    return extractor.extract_text(
-        page_number=config.get('page_num', 1),
-        rect_coordinates=config.get('coordinates', (0, 0, 0, 0)),
-        stop_keywords=config.get('stop_keywords', [])
-    )
+    except requests.exceptions.RequestException as e:
+        print(f"PDF 다운로드 중 오류 발생: {e}")
+        return ""
+    except Exception as e:
+        print(f"PDF 처리 중 오류 발생: {e}")
+        return ""
 
 # 사용 예시
 if __name__ == "__main__":
-    # 로컬 파일 경로
-    pdf_file_path = "20241206_company_651563000.pdf"
+    pdf_url = "https://stock.pstatic.net/stock-research/company/74/20241211_company_40195000.pdf"
+    securities_firm = "한국IR협의회"
     
-    # 또는 PDF URL
-    pdf_url = "https://stock.pstatic.net/stock-research/company/18/20241211_company_639609000.pdf"
-    
-    securities_firm = "유안타증권"  # 원하는 증권사 이름 입력
-    
-    # 로컬 파일 사용
-    """
-    text_local = extract_report_text(pdf_file_path, securities_firm)
-    print(f"로컬 파일 텍스트:")
-    print(text_local)
-    """
-    # URL 사용
-    text_url = extract_report_text(pdf_url, securities_firm)
-    print(f"\nURL PDF 텍스트:")
-    print(text_url)
+    extracted_text = download_and_process_pdf(pdf_url, securities_firm)
+    print(f"추출된 텍스트:\n{extracted_text}")
