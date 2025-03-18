@@ -187,6 +187,7 @@ def recommendation_algorithm():
     file_path = "stock_data.csv"
     
     df = load_data(file_path)
+    print(f"알고리즘 계산을 시작합니다")
     recommendations = calculate_similarity(df)
     
     export_recommendations_to_csv(df, recommendations)
@@ -221,7 +222,7 @@ def crawl_naver_finance_last_search():
         
         # CSV 파일로 저장
         df.to_csv('last_searched_stocks.csv', index=False, header=False, encoding='utf-8-sig')
-        
+        print(f"last_searched_stocks.csv에 저장되었습니다.")
         return df
     
     except Exception as e:
@@ -393,7 +394,9 @@ def check_file_date_and_execute(file_path, function_to_execute):
             
     except FileNotFoundError:
         print(f"에러: {file_path} 파일을 찾을 수 없습니다.")
-        return False
+        print(f"파일을 생성합니다")
+        function_to_execute()
+        return True
     except Exception as e:
         print(f"에러 발생: {e}")
         return False
