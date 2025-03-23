@@ -136,7 +136,9 @@ SECURITIES_CONFIGS = {
     },
 }
 
+#1페이지만 추출
 def download_and_process_pdf(pdf_url: str, securities_firm: str) -> str:
+
     try:
         # 1. PDF 다운로드
         response = requests.get(pdf_url)
@@ -172,10 +174,65 @@ def download_and_process_pdf(pdf_url: str, securities_firm: str) -> str:
         print(f"PDF 처리 중 오류 발생: {e}")
         return ""
 
+#1페이지 추출후 나머지 페이지도 추출
+def download_and_process_pdf2(pdf_url: str, securities_firm: str) -> str:
+    try:
+        # 1. PDF 다운로드
+        response = requests.get(pdf_url)
+        response.raise_for_status()
+        
+        # 2. 메모리 버퍼에 PDF 로드
+        pdf_buffer = io.BytesIO(response.content)
+        
+        try:
+            # PDF 문서 열기
+            doc = fitz.open(stream=pdf_buffer, filetype="pdf")
+            total_pages = len(doc)  # 전체 페이지 수 가져오기
+
+            # 설정값 가져오기
+            config = SECURITIES_CONFIGS.get(securities_firm)
+            if not config:
+                print(f"{securities_firm}에 대한 설정이 없습니다.")
+                return ""
+
+            extractor = PDFTextExtractor(pdf_buffer)
+
+            # 첫 페이지 (특정 영역만 추출)
+            first_page_text = extractor.extract_text(
+                page_number=config.get('page_num', 1),
+                rect_coordinates=config.get('coordinates', (0, 0, 0, 0)),
+                stop_keywords=config.get('stop_keywords', [])
+            )
+
+            # 2페이지 이후 (전체 페이지 텍스트 추출)
+            additional_text = ""
+            for page_number in range(2, total_pages + 1):
+                # 해당 페이지의 전체 크기 가져오기
+                page_rect = doc[page_number - 1].rect  # PyMuPDF는 0-based index 사용
+                full_page_text = extractor.extract_text(
+                    page_number=page_number,
+                    rect_coordinates=(page_rect.x0, page_rect.y0, page_rect.x1, page_rect.y1)  # 전체 영역 사용
+                )
+                additional_text += full_page_text + "\n"
+
+            return first_page_text + "\n" + additional_text
+
+        finally:
+            # 4. 메모리 버퍼 닫기
+            pdf_buffer.close()
+    
+    except requests.exceptions.RequestException as e:
+        print(f"PDF 다운로드 중 오류 발생: {e}")
+        return ""
+    except Exception as e:
+        print(f"PDF 처리 중 오류 발생: {e}")
+        return ""
+
+
 # 사용 예시
 if __name__ == "__main__":
     pdf_url = "https://stock.pstatic.net/stock-research/company/74/20241211_company_40195000.pdf"
     securities_firm = "한국IR협의회"
     
-    extracted_text = download_and_process_pdf(pdf_url, securities_firm)
+    extracted_text = download_and_process_pdf2(pdf_url, securities_firm)
     print(f"추출된 텍스트:\n{extracted_text}")
