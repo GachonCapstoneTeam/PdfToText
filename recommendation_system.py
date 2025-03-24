@@ -16,7 +16,7 @@ def clean_change_value(value):
     return f"{direction}{number}" if number else "0"
 
 def clean_stock_name(name):
-    return ' '.join(name.split())
+    return ' '.join(name.replace('*', '').split())
 
 def crawl_industry_details(industry_url, industry_name):
     headers = {
@@ -151,18 +151,58 @@ def calculate_similarity(df, num_recommendations=10):
     recommendations = {}
     for idx, stock in enumerate(df["종목명"]):
         industry = df.loc[idx, "업종명"]
-        distances = distance_matrix[idx]
+        current_stock_rate = df.loc[idx, "등락률"]
         
-        # 같은 업종 내에서 추천 종목 찾기
+        # 1. 같은 업종 내에서 하락률이 더 높은 종목 찾기 (등락률이 더 낮은 종목)
         same_industry_indices = df[df["업종명"] == industry].index.tolist()
-        same_industry_recs = [i for i in np.argsort(distances) if i in same_industry_indices and i != idx]
+        same_industry_higher_decline = [i for i in same_industry_indices 
+                                       if i != idx and df.loc[i, "등락률"] < current_stock_rate]
         
-        # 같은 업종 추천 종목이 부족하면 다른 업종에서 추가
-        if len(same_industry_recs) < num_recommendations:
-            other_industry_recs = [i for i in np.argsort(distances) if i not in same_industry_recs and i != idx]
-            same_industry_recs.extend(other_industry_recs)
+        # 하락률 기준으로 정렬 (등락률이 낮은 순)
+        same_industry_higher_decline.sort(key=lambda i: df.loc[i, "등락률"])
         
-        recommendations[stock] = df["종목명"].iloc[same_industry_recs[:num_recommendations]].tolist()
+        # 2. 같은 업종 내 하락률 높은 종목이 충분하지 않으면 다른 업종에서 하락률 높은 종목 찾기
+        other_industries_higher_decline = []
+        if len(same_industry_higher_decline) < num_recommendations:
+            other_industry_indices = [i for i in range(len(df)) 
+                                     if i != idx and i not in same_industry_indices 
+                                     and df.loc[i, "등락률"] < current_stock_rate]
+            
+            # 역시 하락률 기준으로 정렬
+            other_industry_indices.sort(key=lambda i: df.loc[i, "등락률"])
+            other_industries_higher_decline = other_industry_indices
+        
+        # 3. 하락률 높은 종목들 합치기 (같은 업종 우선)
+        higher_decline_indices = same_industry_higher_decline + other_industries_higher_decline
+        
+        # 4. 여전히 부족하면 기존 유사도 알고리즘 적용
+        if len(higher_decline_indices) < num_recommendations:
+            distances = distance_matrix[idx]
+            
+            # 아직 포함되지 않은 같은 업종 종목들
+            remaining_same_industry = [i for i in same_industry_indices 
+                                      if i != idx and i not in higher_decline_indices]
+            
+            # 거리순으로 정렬
+            remaining_same_industry.sort(key=lambda i: distances[i])
+            
+            # 다른 업종의 나머지 종목들
+            remaining_other_industries = [i for i in range(len(df)) 
+                                         if i != idx and i not in same_industry_indices 
+                                         and i not in higher_decline_indices]
+            
+            # 거리순으로 정렬
+            remaining_other_industries.sort(key=lambda i: distances[i])
+            
+            # 같은 업종 우선, 그 다음 다른 업종
+            additional_recs = remaining_same_industry + remaining_other_industries
+            
+            # 하락률 높은 종목 + 유사도 기반 종목
+            combined_recs = higher_decline_indices + additional_recs
+            recommendations[stock] = df["종목명"].iloc[combined_recs[:num_recommendations]].tolist()
+        else:
+            # 하락률 높은 종목만으로 충분한 경우
+            recommendations[stock] = df["종목명"].iloc[higher_decline_indices[:num_recommendations]].tolist()
     
     return recommendations
 
@@ -400,10 +440,124 @@ def check_file_date_and_execute(file_path, function_to_execute):
     except Exception as e:
         print(f"에러 발생: {e}")
         return False
+import pandas as pd
+import random
 
+def get_unique_recommendations(file_paths, stock_name, num_recommendations=5):
+    """
+    특정 종목에 대해 중복되지 않는 추천 종목을 반환하는 함수
+    여러 CSV 파일에서 데이터를 읽어옵니다.
+
+    Args:
+        file_paths (list): 추천 종목 CSV 파일 경로 리스트
+        stock_name (str): 추천을 원하는 종목명
+        num_recommendations (int): 반환할 추천 종목 수 (기본값: 5)
+
+    Returns:
+        list: 중복 없는 추천 종목 리스트. 종목이 존재하지 않으면 빈 리스트 반환
+    """
+    try:
+        recommended_stocks = []
+        found_stock = False
+        
+        # 각 파일에서 데이터 읽기
+        for file_path in file_paths:
+            try:
+                df = pd.read_csv(file_path, encoding='utf-8-sig')
+
+                # 파일이 stock_recommendations.csv와 같은 구조인 경우
+                if '종목명' in df.columns:
+                    rec_columns = [f'추천종목_{i+1}' for i in range(10)]
+                    stock_data = df[df['종목명'] == stock_name]
+
+                    if not stock_data.empty:
+                        found_stock = True
+                        row = stock_data.iloc[0]
+                        file_recommendations = [stock for stock in row[rec_columns] if pd.notna(stock)]
+                        recommended_stocks.extend(file_recommendations)
+
+                # last_searched_stocks.csv처럼 종목명만 있는 경우
+                elif len(df.columns) == 1:
+                    stock_list = df.iloc[:, 0].dropna().tolist()
+                    
+                    if stock_name in stock_list:
+                        found_stock = True
+                        recommended_stocks.extend(stock_list)  # 전체 리스트를 추천 종목으로 추가
+                    
+            except Exception as e:
+                print(f"{file_path} 파일 처리 중 오류 발생: {e}")
+
+        if not found_stock:
+            print(f"'{stock_name}' 종목을 어떤 파일에서도 찾을 수 없습니다.")
+            return []
+
+        if len(recommended_stocks) == 0:
+            print(f"'{stock_name}' 종목에 대한 추천 종목이 없습니다.")
+            return []
+
+        # 중복 없는 추천 종목 선택
+        unique_recommendations = list(set(recommended_stocks) - {stock_name})
+
+        # 5개만 랜덤으로 선택
+        return random.sample(unique_recommendations, min(len(unique_recommendations), num_recommendations))
+
+    except Exception as e:
+        print(f"추천 종목 조회 중 오류 발생: {e}")
+        return []
+
+
+def get_multiple_stocks_recommendations(file_paths, stock_names, num_recommendations=5):
+    """
+    여러 종목에 대해 각각 중복 없는 5개의 추천 종목을 반환하는 함수
+    
+    Args:
+        file_paths (list): 추천 종목 CSV 파일 경로 리스트
+        stock_names (list): 추천을 원하는 종목명 리스트
+        num_recommendations (int): 각 종목당 반환할 추천 종목 수 (기본값: 5)
+        
+    Returns:
+        dict: 종목별 중복 없는 추천 종목 딕셔너리
+    """
+    all_recommendations = {}
+    
+    for stock in stock_names:
+        recommendations = get_unique_recommendations(file_paths, stock, num_recommendations)
+        all_recommendations[stock] = recommendations
+        
+    return all_recommendations
+
+def print_unique_recommendations(file_paths, stock_names, num_recommendations=5):
+    """
+    여러 종목의 중복 없는 추천 결과를 출력하는 함수
+    
+    Args:
+        file_paths (list): 추천 종목 CSV 파일 경로 리스트
+        stock_names (list): 추천을 원하는 종목명 리스트
+        num_recommendations (int): 각 종목당 출력할 추천 종목 수 (기본값: 5)
+    """
+    recommendations = get_multiple_stocks_recommendations(file_paths, stock_names, num_recommendations)
+    
+    print("\n=== 종목별 추천 결과 (중복 없는 5개 종목) ===")
+    for stock, recs in recommendations.items():
+        if not recs:  # 추천 종목이 없는 경우
+            print(f"\n{stock}: 추천 종목을 찾을 수 없습니다.")
+        else:
+            print(f"\n{stock}의 추천 종목:")
+            for i, rec in enumerate(recs, 1):
+                print(f"{i}. {rec}")
+
+# 사용 예시
+# file_paths = ['stock_recommendations1.csv', 'stock_recommendations2.csv']
+# my_stocks = ['삼성전자', 'SK하이닉스', 'NAVER']
+# print_unique_recommendations(file_paths, my_stocks)
 
 # 파일 경로와 함수를 지정하여 실행
 file_path_1 = "stock_data.csv"
 file_path_2 = "last_searched_stocks.csv"
+
+file_paths = ['stock_recommendations.csv', 'last_searched_stocks.csv']
 check_file_date_and_execute(file_path_1, recommendation_algorithm)
 check_file_date_and_execute(file_path_2, crawl_naver_finance_last_search)
+
+#print_unique_recommendations(file_paths, ['삼일', '삼성전자'])
+#print(f"테스트 추천 결과: {get_unique_recommendations(file_paths, '삼일')}")
